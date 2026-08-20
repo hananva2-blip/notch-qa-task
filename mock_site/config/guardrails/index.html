@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<!--
+  Local, static stand-in for the real "Automation Audit" section of
+  Config > Automation > Guardrails (guardio.app.getnotch.dev).
+
+  This is a test fixture only - it is NOT the real product and is never
+  shown to an end user. It exists so the Playwright suite in ../../tests can
+  be executed end-to-end from a network-restricted environment (this sandbox
+  cannot reach guardio.app.getnotch.dev directly) while still exercising the
+  exact DOM shape, interaction model and known defects observed on the real
+  page during manual exploration:
+
+    - 4 chip/tag-list fields, add via textarea + Enter, remove via a
+      <button>x</button> with no aria-label (see A11Y-03)
+    - exact-duplicate submissions are rejected, but reproduce the real
+      "stale text left in the input" defect (see VAL-06)
+    - header swaps a single "Deploy" button for "Discard" / "Save" as soon
+      as any field is dirty
+    - Discard opens a confirmation modal with "Keep editing" / "Discard"
+    - Save persists to localStorage so a reload reflects the last save,
+      matching STATE-02's expectations
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Guardrails (mock)</title>
+<style>
+  body { font-family: Arial, sans-serif; max-width: 900px; margin: 40px auto; }
+  h1 { font-size: 20px; }
+  .field { margin-bottom: 28px; }
+  .field h3 { margin-bottom: 2px; }
+  .field p { color: #555; margin-top: 0; }
+  .box { border: 1px solid #ddd; border-radius: 8px; padding: 10px; display: flex;
+         flex-wrap: wrap; align-items: center; gap: 8px; }
+  .chip { background: #f1f1f1; border-radius: 14px; padding: 4px 8px 4px 12px;
+          display: inline-flex; align-items: center; gap: 6px; }
+  .chip button { border: none; background: transparent; cursor: pointer; font-size: 14px; }
+  textarea { border: none; outline: none; resize: none; flex: 1; min-width: 220px;
+             font-family: inherit; font-size: 14px; height: 20px; }
+  header { display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 20px; }
+  button.top { padding: 8px 16px; border-radius: 6px; border: 1px solid #333;
+               background: #111; color: #fff; cursor: pointer; }
+  button.top.secondary { background: #fff; color: #111; }
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.4);
+                     display: none; align-items: center; justify-content: center; }
+  .modal { background: #fff; padding: 24px; border-radius: 8px; width: 360px; }
+  .modal h2 { margin-top: 0; }
+  .modal .actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+</style>
+</head>
+<body>
+
+<header id="header"></header>
+<h1>Guardrails - Automation Audit (mock)</h1>
+
+<!--
+  Nesting is deliberately 3 <div>s deep between the heading <span> and the
+  chip/textarea box, mirroring the real site's DOM shape (confirmed via
+  live DOM introspection: span -> div -> div -> div[contains textarea]) so
+  that pages/guardrails_page.py's `ancestor::div[3]` locator strategy is
+  exercised the same way it would be against the real app.
+-->
+<div class="field" data-field="emails">
+  <div class="headerBlock"><div class="labelWrap"><span>Emails patterns to unassign</span></div>
+  <p>The AI will unassign the conversation if the sender's email address contains any of these patterns.</p></div>
+  <div class="box" data-box="emails"></div>
+</div>
+
+<div class="field" data-field="subjects">
+  <div class="headerBlock"><div class="labelWrap"><span>Subjects</span></div>
+  <p>The AI will unassign the conversation if the subject line contains any of these keywords.</p></div>
+  <div class="box" data-box="subjects"></div>
+</div>
+
+<div class="field" data-field="userMessage">
+  <div class="headerBlock"><div class="labelWrap"><span>Words in User Message</span></div>
+  <p>The AI will unassign the conversation if the user message contains any of these words.</p></div>
+  <div class="box" data-box="userMessage"></div>
+</div>
+
+<div class="field" data-field="assistantReply">
+  <div class="headerBlock"><div class="labelWrap"><span>Words in Assistant's Reply</span></div>
+  <p>Unassigns the conversation if the AI agent generated reply contains any of these words.</p></div>
+  <div class="box" data-box="assistantReply"></div>
+</div>
+
+<div class="modal-backdrop" id="modalBackdrop">
+  <div class="modal">
+    <h2>Discard changes</h2>
+    <p>Are you sure you want to discard your changes? This action cannot be undone.</p>
+    <div class="actions">
+      <button class="top secondary" id="keepEditingBtn">Keep editing</button>
+      <button class="top" id="confirmDiscardBtn">Discard</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const SEED = {
+  emails: ["testroman1@test.com", "noreply", "test@gmail.com", "liran@test.com"],
+  subjects: ["Lawyer"],
+  userMessage: ["gdprfupdz", "block", "gdprtbulq", "gdprgfycm", "gdprjytfc", "gdprouojz",
+                "gdpryuyrv", "liran"],
+  assistantReply: [],
+};
+const PLACEHOLDERS = {
+  emails: "Add an email pattern (e.g., '@shopify') and press Enter",
+  subjects: "Add a subject keyword (e.g., 'automation') and press Enter",
+  userMessage: "Add a word (e.g., 'GDPR') and press Enter",
+  assistantReply: "Add a word (e.g., 'paperwork') and press Enter",
+};
+
+function loadSaved() {
+  const raw = localStorage.getItem("guardrails_mock_saved");
+  return raw ? JSON.parse(raw) : JSON.parse(JSON.stringify(SEED));
+}
+
+let saved = loadSaved();
+let current = JSON.parse(JSON.stringify(saved));
+// Per-field leftover text left in the input after a rejected duplicate,
+// reproducing the real defect (VAL-06) instead of clearing it.
+let staleInputText = { emails: "", subjects: "", userMessage: "", assistantReply: "" };
+
+function isDirty() {
+  return JSON.stringify(saved) !== JSON.stringify(current);
+}
+
+function renderHeader() {
+  const el = document.getElementById("header");
+  if (isDirty()) {
+    el.innerHTML = `
+      <button class="top secondary" id="discardBtn">Discard</button>
+      <button class="top" id="saveBtn">Save</button>`;
+    document.getElementById("discardBtn").onclick = onDiscardClick;
+    document.getElementById("saveBtn").onclick = onSave;
+  } else {
+    el.innerHTML = `<button class="top" id="deployBtn">Deploy</button>`;
+  }
+}
+
+function renderField(key) {
+  const box = document.querySelector(`[data-box="${key}"]`);
+  box.innerHTML = "";
+  current[key].forEach((value) => {
+    const chip = document.createElement("div");
+    chip.className = "chip";
+    chip.textContent = value;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "×"; // '×' - intentionally no aria-label (A11Y-03)
+    btn.onclick = () => {
+      current[key] = current[key].filter((v) => v !== value);
+      renderField(key);
+      renderHeader();
+    };
+    chip.appendChild(btn);
+    box.appendChild(chip);
+  });
+  const textarea = document.createElement("textarea");
+  textarea.placeholder = PLACEHOLDERS[key];
+  textarea.value = staleInputText[key];
+  textarea.rows = 1;
+  textarea.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const raw = textarea.value;
+      const trimmed = raw.trim();
+      if (!trimmed) {
+        // Empty / whitespace-only submit: no-op (VAL-01 / VAL-02).
+        return;
+      }
+      if (current[key].includes(trimmed)) {
+        // Exact duplicate: reject, but (defect) leave the raw text in the
+        // input instead of clearing it - see VAL-06.
+        staleInputText[key] = raw;
+        return;
+      }
+      current[key].push(trimmed);
+      staleInputText[key] = "";
+      renderField(key);
+      renderHeader();
+    }
+  });
+  textarea.addEventListener("input", () => { staleInputText[key] = textarea.value; });
+  box.appendChild(textarea);
+}
+
+function renderAll() {
+  Object.keys(current).forEach(renderField);
+  renderHeader();
+}
+
+function onSave() {
+  saved = JSON.parse(JSON.stringify(current));
+  localStorage.setItem("guardrails_mock_saved", JSON.stringify(saved));
+  staleInputText = { emails: "", subjects: "", userMessage: "", assistantReply: "" };
+  renderAll();
+}
+
+function onDiscardClick() {
+  document.getElementById("modalBackdrop").style.display = "flex";
+}
+
+document.getElementById("keepEditingBtn").onclick = () => {
+  document.getElementById("modalBackdrop").style.display = "none";
+};
+document.getElementById("confirmDiscardBtn").onclick = () => {
+  current = JSON.parse(JSON.stringify(saved));
+  staleInputText = { emails: "", subjects: "", userMessage: "", assistantReply: "" };
+  document.getElementById("modalBackdrop").style.display = "none";
+  renderAll();
+};
+
+renderAll();
+</script>
+</body>
+</html>
