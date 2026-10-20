@@ -8,8 +8,8 @@ Playwright + pytest tests for the "Automation Audit" section of Guardrails
 - Words in User Message
 - Words in Assistant's Reply
 
-15 automated cases out of 83 planned - see `Automation_Audit_Test_Cases.xlsx`
-for the full matrix and `Automation_Audit_Test_Plan.docx` for the test plan.
+15 automated cases out of 83 planned - see
+`tests/Automation_Audit_Test_Cases.xlsx` for the full test case matrix.
 
 ## Setup
 
